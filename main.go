@@ -40,5 +40,7 @@ func scoreRepository(w http.ResponseWriter, r *http.Request, params httprouter.P
 	client := github.NewClient(oauthClient)
 
 	issueScore := repohealth.GetIssueScore(client, params.ByName("org"), params.ByName("repo"))
-	json.NewEncoder(w).Encode(issueScore)
+	prScore := repohealth.GetPRScore(client, params.ByName("org"), params.ByName("repo"))
+	repoScore := repohealth.RepositoryScore{Issues: issueScore, PRs: prScore}
+	json.NewEncoder(w).Encode(repoScore)
 }
