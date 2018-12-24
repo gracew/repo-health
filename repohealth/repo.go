@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/machinebox/graphql"
+	"github.com/montanaflynn/stats"
 )
 
 type RepositoryScore struct {
@@ -15,26 +16,26 @@ type RepositoryScore struct {
 }
 
 type WeeklyIssueMetrics struct {
-	Week             string  `json:"week"`
-	NumClosed        int     `json:"closed"`
-	NumOpen          int     `json:"opened"`
-	TimeToResponse   []int64 `json:"timeToResponse"`   // in sec
-	TimeToResolution []int64 `json:"timeToResolution"` // in sec
+	Week             string `json:"week"`
+	NumClosed        int    `json:"closed"`
+	NumOpen          int    `json:"opened"`
+	TimeToResponse   []int  `json:"timeToResponse"`   // in sec
+	TimeToResolution []int  `json:"timeToResolution"` // in sec
 }
 
 type WeeklyPRMetrics struct {
-	Week             string  `json:"week"`
-	NumMerged        int     `json:"merged"`
-	NumRejected      int     `json:"rejected"`
-	NumOpen          int     `json:"opened"`
-	NumReviews       int     `json:"numReviews"`
-	TimeToResponse   []int64 `json:"timeToResponse"`   // in sec
-	TimeToResolution []int64 `json:"timeToResolution"` // in sec
+	Week             string `json:"week"`
+	NumMerged        int    `json:"merged"`
+	NumRejected      int    `json:"rejected"`
+	NumOpen          int    `json:"opened"`
+	NumReviews       int    `json:"numReviews"`
+	TimeToResponse   []int  `json:"timeToResponse"`   // in sec
+	TimeToResolution []int  `json:"timeToResolution"` // in sec
 }
 
 type WeeklyCIMetrics struct {
-	Week string `json:"week"`
-	// probably unreasonable to include all build times??
+	Week        string `json:"week"`
+	BuildTime50 int    `json:"buildTime50"` // in sec
 }
 
 type issueDatesResponse struct {
@@ -71,6 +72,19 @@ type prDates struct {
 	CreatedAt *time.Time
 	ClosedAt  *time.Time
 	MergedAt  *time.Time
+	Commits   struct {
+		Nodes []struct {
+			Commit struct {
+				PushedDate *time.Time
+				Status     struct {
+					Contexts []struct {
+						Context   string
+						CreatedAt *time.Time
+					}
+				}
+			}
+		}
+	}
 }
 
 const pageSize = 100 // default is 30
@@ -104,7 +118,6 @@ func GetIssueScore(client *graphql.Client, owner string, name string, numWeeks i
 	return metrics
 }
 
-// this returns a few issues older than the specified time, but we filter those out in the calling code...
 func getIssuesCreatedSince(client *graphql.Client, owner string, name string, since time.Time) []issueDates {
 	req := graphql.NewRequest(`
 		query ($owner: String!, $name: String!, $pageSize: Int!, $after: String) {
@@ -129,60 +142,89 @@ func getIssuesCreatedSince(client *graphql.Client, owner string, name string, si
 	req.Var("after", nil)
 
 	var issues []issueDates
-	hasNextPage := true
-	for hasNextPage {
-		if len(issues) > 0 && issues[len(issues)-1].CreatedAt.Before(since) {
-			break
-		}
+	getNextPage := true
+	for getNextPage {
 		var res issueDatesResponse
 		if err := client.Run(context.Background(), req, &res); err != nil {
 			log.Panic(err)
 		}
-		issues = append(issues, res.Repository.Issues.Nodes...)
-		hasNextPage = res.Repository.Issues.PageInfo.HasNextPage
+		newIssues := res.Repository.Issues.Nodes
+		lastIndex := len(newIssues)
+		for lastIndex > 0 && newIssues[lastIndex-1].CreatedAt.Before(since) {
+			lastIndex--
+		}
+		issues = append(issues, newIssues[:lastIndex]...)
+		getNextPage = lastIndex == len(newIssues) && res.Repository.Issues.PageInfo.HasNextPage
 		req.Var("after", res.Repository.Issues.PageInfo.EndCursor)
 	}
 
 	return issues
 }
 
-func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int) []WeeklyPRMetrics {
+func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int) ([]WeeklyPRMetrics, []WeeklyCIMetrics) {
 	since := time.Now().AddDate(0, 0, -7*numWeeks)
-	prs := getPRsSince(client, owner, name, since)
+	prs := getPRsCreatedSince(client, owner, name, since)
 
 	weekToNumPRsOpened := map[int]int{}
 	weekToNumPRsMerged := map[int]int{}
 	weekToNumPRsRejected := map[int]int{}
+	weekToCITimes := map[int][]float64{}
 
 	secondsInWeek := 60 * 60 * 24 * 7
 	for _, pr := range prs {
-		week := int(pr.CreatedAt.Sub(since).Seconds()) / secondsInWeek
-		weekToNumPRsOpened[week]++
+		createdWeek := int(pr.CreatedAt.Sub(since).Seconds()) / secondsInWeek
+		weekToNumPRsOpened[createdWeek]++
 
 		if pr.ClosedAt != nil && pr.ClosedAt.After(since) {
-			week := int(pr.ClosedAt.Sub(since).Seconds()) / secondsInWeek
+			closedWeek := int(pr.ClosedAt.Sub(since).Seconds()) / secondsInWeek
 			if pr.MergedAt != nil {
-				weekToNumPRsMerged[week]++
+				weekToNumPRsMerged[closedWeek]++
 			} else {
-				weekToNumPRsRejected[week]++
+				weekToNumPRsRejected[closedWeek]++
 			}
 		}
+
+		maxCheckDuration := 0
+		latestPRCommit := pr.Commits.Nodes[0].Commit
+		for _, context := range latestPRCommit.Status.Contexts {
+			duration := int(context.CreatedAt.Sub(*latestPRCommit.PushedDate).Seconds())
+			if duration > maxCheckDuration {
+				maxCheckDuration = duration
+			}
+		}
+		pushedWeek := int(latestPRCommit.PushedDate.Sub(since).Seconds()) / secondsInWeek
+		if pushedWeek < 0 {
+			// commit may have been pushed before the PR was created; in this case use the PR creation date
+			pushedWeek = createdWeek
+		}
+		weekToCITimes[pushedWeek] = append(weekToCITimes[pushedWeek], float64(maxCheckDuration))
 	}
 
-	metrics := []WeeklyPRMetrics{}
+	prMetrics := []WeeklyPRMetrics{}
+	ciMetrics := []WeeklyCIMetrics{}
 	for week := 0; week < numWeeks; week++ {
-		metrics = append(metrics, WeeklyPRMetrics{
+		prMetrics = append(prMetrics, WeeklyPRMetrics{
 			Week:        since.AddDate(0, 0, week*7).String(),
 			NumOpen:     weekToNumPRsOpened[week],
 			NumRejected: weekToNumPRsRejected[week],
 			NumMerged:   weekToNumPRsMerged[week],
 		})
+
+		medianBuildTime, err := stats.Percentile(weekToCITimes[week], 50)
+		if err != nil {
+			// log error, but continue -- medianBuildTime will be NaN
+			log.Println(err)
+		}
+		ciMetrics = append(ciMetrics, WeeklyCIMetrics{
+			Week:        since.AddDate(0, 0, week*7).String(),
+			BuildTime50: int(medianBuildTime),
+		})
 	}
-	return metrics
+
+	return prMetrics, ciMetrics
 }
 
-// this returns a few PRs older than the specified time, but we filter those out in the calling code...
-func getPRsSince(client *graphql.Client, owner string, name string, since time.Time) []prDates {
+func getPRsCreatedSince(client *graphql.Client, owner string, name string, since time.Time) []prDates {
 	// TODO(gracew): look up the repo's default branch and use that in the query
 	req := graphql.NewRequest(`
 		query ($owner: String!, $name: String!, $pageSize: Int!, $after: String) {
@@ -193,6 +235,20 @@ func getPRsSince(client *graphql.Client, owner string, name string, since time.T
 						createdAt
 						closedAt
 						mergedAt
+						commits(last: 1) {
+							nodes {
+								commit {
+									pushedDate
+									status {
+										contexts {
+											context
+											createdAt
+											state
+										}
+									}
+								}
+							}
+						}
 					}
 					pageInfo {
 						endCursor
@@ -208,17 +264,19 @@ func getPRsSince(client *graphql.Client, owner string, name string, since time.T
 	req.Var("after", nil)
 
 	var prs []prDates
-	hasNextPage := true
-	for hasNextPage {
-		if len(prs) > 0 && prs[len(prs)-1].CreatedAt.Before(since) {
-			break
-		}
+	getNextPage := true
+	for getNextPage {
 		var res prDatesResponse
 		if err := client.Run(context.Background(), req, &res); err != nil {
 			log.Panic(err)
 		}
-		prs = append(prs, res.Repository.PullRequests.Nodes...)
-		hasNextPage = res.Repository.PullRequests.PageInfo.HasNextPage
+		newPrs := res.Repository.PullRequests.Nodes
+		lastIndex := len(newPrs)
+		for lastIndex > 0 && newPrs[lastIndex-1].CreatedAt.Before(since) {
+			lastIndex--
+		}
+		prs = append(prs, newPrs[:lastIndex]...)
+		getNextPage = lastIndex == len(newPrs) && res.Repository.PullRequests.PageInfo.HasNextPage
 		req.Var("after", res.Repository.PullRequests.PageInfo.EndCursor)
 	}
 
