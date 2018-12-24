@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/machinebox/graphql"
-	metrics "github.com/rcrowley/go-metrics"
+	"github.com/montanaflynn/stats"
 )
 
 type RepositoryScore struct {
@@ -16,26 +16,26 @@ type RepositoryScore struct {
 }
 
 type WeeklyIssueMetrics struct {
-	Week             string  `json:"week"`
-	NumClosed        int     `json:"closed"`
-	NumOpen          int     `json:"opened"`
-	TimeToResponse   []int64 `json:"timeToResponse"`   // in sec
-	TimeToResolution []int64 `json:"timeToResolution"` // in sec
+	Week             string `json:"week"`
+	NumClosed        int    `json:"closed"`
+	NumOpen          int    `json:"opened"`
+	TimeToResponse   []int  `json:"timeToResponse"`   // in sec
+	TimeToResolution []int  `json:"timeToResolution"` // in sec
 }
 
 type WeeklyPRMetrics struct {
-	Week             string  `json:"week"`
-	NumMerged        int     `json:"merged"`
-	NumRejected      int     `json:"rejected"`
-	NumOpen          int     `json:"opened"`
-	NumReviews       int     `json:"numReviews"`
-	TimeToResponse   []int64 `json:"timeToResponse"`   // in sec
-	TimeToResolution []int64 `json:"timeToResolution"` // in sec
+	Week             string `json:"week"`
+	NumMerged        int    `json:"merged"`
+	NumRejected      int    `json:"rejected"`
+	NumOpen          int    `json:"opened"`
+	NumReviews       int    `json:"numReviews"`
+	TimeToResponse   []int  `json:"timeToResponse"`   // in sec
+	TimeToResolution []int  `json:"timeToResolution"` // in sec
 }
 
 type WeeklyCIMetrics struct {
 	Week        string `json:"week"`
-	BuildTime50 int64  `json:"buildTime50"` // in sec
+	BuildTime50 int    `json:"buildTime50"` // in sec
 }
 
 type issueDatesResponse struct {
@@ -168,11 +168,7 @@ func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int)
 	weekToNumPRsOpened := map[int]int{}
 	weekToNumPRsMerged := map[int]int{}
 	weekToNumPRsRejected := map[int]int{}
-	weekToCIHistogram := map[int]metrics.Histogram{}
-	for week := 0; week < numWeeks; week++ {
-		// just pick a really large reservoir size so we keep all measurements (one for each PR)
-		weekToCIHistogram[week] = metrics.NewHistogram(metrics.NewUniformSample(10000))
-	}
+	weekToCITimes := map[int][]float64{}
 
 	secondsInWeek := 60 * 60 * 24 * 7
 	for _, pr := range prs {
@@ -201,10 +197,11 @@ func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int)
 			// commit may have been pushed before the PR was created; in this case use the PR creation date
 			pushedWeek = createdWeek
 		}
-		weekToCIHistogram[pushedWeek].Update(int64(maxCheckDuration))
+		weekToCITimes[pushedWeek] = append(weekToCITimes[pushedWeek], float64(maxCheckDuration))
 	}
 
 	prMetrics := []WeeklyPRMetrics{}
+	ciMetrics := []WeeklyCIMetrics{}
 	for week := 0; week < numWeeks; week++ {
 		prMetrics = append(prMetrics, WeeklyPRMetrics{
 			Week:        since.AddDate(0, 0, week*7).String(),
@@ -212,15 +209,18 @@ func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int)
 			NumRejected: weekToNumPRsRejected[week],
 			NumMerged:   weekToNumPRsMerged[week],
 		})
-	}
 
-	ciMetrics := []WeeklyCIMetrics{}
-	for week := 0; week < numWeeks; week++ {
+		medianBuildTime, err := stats.Percentile(weekToCITimes[week], 50)
+		if err != nil {
+			// log error, but continue -- medianBuildTime will be NaN
+			log.Println(err)
+		}
 		ciMetrics = append(ciMetrics, WeeklyCIMetrics{
 			Week:        since.AddDate(0, 0, week*7).String(),
-			BuildTime50: int64(weekToCIHistogram[week].Percentile(.5)),
+			BuildTime50: int(medianBuildTime),
 		})
 	}
+
 	return prMetrics, ciMetrics
 }
 
