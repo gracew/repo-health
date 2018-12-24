@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/google/go-github/github"
+	"github.com/machinebox/graphql"
 )
 
 type RepositoryScore struct {
@@ -37,25 +37,56 @@ type WeeklyCIMetrics struct {
 	// probably unreasonable to include all build times??
 }
 
-const numWeeks = 6
+type issueDatesResponse struct {
+	Repository struct {
+		Issues struct {
+			Nodes    []issueDates
+			PageInfo pageInfo
+		}
+	}
+}
+
+type issueDates struct {
+	Number    int
+	CreatedAt *time.Time
+	ClosedAt  *time.Time
+}
+
+type pageInfo struct {
+	EndCursor   string
+	HasNextPage bool
+}
+
+type prDatesResponse struct {
+	Repository struct {
+		PullRequests struct {
+			Nodes    []prDates
+			PageInfo pageInfo
+		}
+	}
+}
+
+type prDates struct {
+	Number    int
+	CreatedAt *time.Time
+	ClosedAt  *time.Time
+	MergedAt  *time.Time
+}
+
 const pageSize = 100 // default is 30
 
-func GetIssueScore(client *github.Client, owner string, repo string) []WeeklyIssueMetrics {
+func GetIssueScore(client *graphql.Client, owner string, name string, numWeeks int) []WeeklyIssueMetrics {
 	since := time.Now().AddDate(0, 0, -7*numWeeks)
-	issues := getIssuesSince(client, owner, repo, since)
+	issues := getIssuesCreatedSince(client, owner, name, since)
 
 	weekToNumIssuesOpened := map[int]int{}
 	weekToNumIssuesClosed := map[int]int{}
 
 	secondsInWeek := 60 * 60 * 24 * 7
 	for _, issue := range issues {
-		if issue.IsPullRequest() {
-			continue
-		}
-		if issue.CreatedAt.After(since) {
-			week := int(issue.CreatedAt.Sub(since).Seconds()) / secondsInWeek
-			weekToNumIssuesOpened[week]++
-		}
+		week := int(issue.CreatedAt.Sub(since).Seconds()) / secondsInWeek
+		weekToNumIssuesOpened[week]++
+
 		if issue.ClosedAt != nil && issue.ClosedAt.After(since) {
 			week := int(issue.ClosedAt.Sub(since).Seconds()) / secondsInWeek
 			weekToNumIssuesClosed[week]++
@@ -73,26 +104,51 @@ func GetIssueScore(client *github.Client, owner string, repo string) []WeeklyIss
 	return metrics
 }
 
-func getIssuesSince(client *github.Client, owner string, repo string, since time.Time) []*github.Issue {
-	opts := &github.IssueListByRepoOptions{
-		State:       "all",
-		Since:       since,
-		ListOptions: github.ListOptions{PerPage: pageSize},
+// this returns a few issues older than the specified time, but we filter those out in the calling code...
+func getIssuesCreatedSince(client *graphql.Client, owner string, name string, since time.Time) []issueDates {
+	req := graphql.NewRequest(`
+		query ($owner: String!, $name: String!, $pageSize: Int!, $after: String) {
+			repository(owner: $owner, name: $name) {
+		 		issues(first: $pageSize, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) {
+					nodes {
+						number
+						createdAt
+						closedAt
+					}
+					pageInfo {
+						endCursor
+						hasNextPage
+					}
+				}
+			}
+	  	}
+	`)
+	req.Var("owner", owner)
+	req.Var("name", name)
+	req.Var("pageSize", pageSize)
+	req.Var("after", nil)
+
+	var issues []issueDates
+	hasNextPage := true
+	for hasNextPage {
+		if len(issues) > 0 && issues[len(issues)-1].CreatedAt.Before(since) {
+			break
+		}
+		var res issueDatesResponse
+		if err := client.Run(context.Background(), req, &res); err != nil {
+			log.Panic(err)
+		}
+		issues = append(issues, res.Repository.Issues.Nodes...)
+		hasNextPage = res.Repository.Issues.PageInfo.HasNextPage
+		req.Var("after", res.Repository.Issues.PageInfo.EndCursor)
 	}
-	issues, res, _ := client.Issues.ListByRepo(context.Background(), owner, repo, opts)
-	log.Println(*res)
-	for i := res.NextPage; i <= res.LastPage; i++ {
-		opts.Page = i
-		additionalIssues, res, _ := client.Issues.ListByRepo(context.Background(), owner, repo, opts)
-		log.Println(*res)
-		issues = append(issues, additionalIssues...)
-	}
+
 	return issues
 }
 
-func GetPRScore(client *github.Client, owner string, repo string) []WeeklyPRMetrics {
+func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int) []WeeklyPRMetrics {
 	since := time.Now().AddDate(0, 0, -7*numWeeks)
-	prs := getPRsSince(client, owner, repo, since)
+	prs := getPRsSince(client, owner, name, since)
 
 	weekToNumPRsOpened := map[int]int{}
 	weekToNumPRsMerged := map[int]int{}
@@ -100,10 +156,9 @@ func GetPRScore(client *github.Client, owner string, repo string) []WeeklyPRMetr
 
 	secondsInWeek := 60 * 60 * 24 * 7
 	for _, pr := range prs {
-		if pr.CreatedAt.After(since) {
-			week := int(pr.CreatedAt.Sub(since).Seconds()) / secondsInWeek
-			weekToNumPRsOpened[week]++
-		}
+		week := int(pr.CreatedAt.Sub(since).Seconds()) / secondsInWeek
+		weekToNumPRsOpened[week]++
+
 		if pr.ClosedAt != nil && pr.ClosedAt.After(since) {
 			week := int(pr.ClosedAt.Sub(since).Seconds()) / secondsInWeek
 			if pr.MergedAt != nil {
@@ -126,28 +181,45 @@ func GetPRScore(client *github.Client, owner string, repo string) []WeeklyPRMetr
 	return metrics
 }
 
-func getPRsSince(client *github.Client, owner string, repo string, since time.Time) []*github.PullRequest {
-	repoObj, _, _ := client.Repositories.Get(context.Background(), owner, repo)
-	opts := &github.PullRequestListOptions{
-		State:       "all",
-		ListOptions: github.ListOptions{PerPage: pageSize},
-		Base:        *repoObj.DefaultBranch,
-		Sort:        "updated",
-		Direction:   "desc",
-	}
-	prs, res, _ := client.PullRequests.List(context.Background(), owner, repo, opts)
+// this returns a few PRs older than the specified time, but we filter those out in the calling code...
+func getPRsSince(client *graphql.Client, owner string, name string, since time.Time) []prDates {
+	// TODO(gracew): look up the repo's default branch and use that in the query
+	req := graphql.NewRequest(`
+		query ($owner: String!, $name: String!, $pageSize: Int!, $after: String) {
+			repository(owner: $owner, name: $name) {
+		 		pullRequests(first: $pageSize, after: $after, orderBy: {field: CREATED_AT, direction: DESC}, baseRefName: "master") {
+					nodes {
+						number
+						createdAt
+						closedAt
+						mergedAt
+					}
+					pageInfo {
+						endCursor
+						hasNextPage
+					}
+				}
+			}
+	  	}
+	`)
+	req.Var("owner", owner)
+	req.Var("name", name)
+	req.Var("pageSize", pageSize)
+	req.Var("after", nil)
 
-	// unfortunately the list PRs endpoint doesn't support date filtering, so we do it ourselves. this returns a
-	// few PRs older than the specified time, but we filter those out in the calling code...
-	for i := res.NextPage; i <= res.LastPage; i++ {
-		lastPr := prs[len(prs)-1]
-		if lastPr.UpdatedAt.Before(since) {
+	var prs []prDates
+	hasNextPage := true
+	for hasNextPage {
+		if len(prs) > 0 && prs[len(prs)-1].CreatedAt.Before(since) {
 			break
 		}
-		opts.Page = i
-		additionalPRs, res, _ := client.PullRequests.List(context.Background(), owner, repo, opts)
-		log.Println(*res)
-		prs = append(prs, additionalPRs...)
+		var res prDatesResponse
+		if err := client.Run(context.Background(), req, &res); err != nil {
+			log.Panic(err)
+		}
+		prs = append(prs, res.Repository.PullRequests.Nodes...)
+		hasNextPage = res.Repository.PullRequests.PageInfo.HasNextPage
+		req.Var("after", res.Repository.PullRequests.PageInfo.EndCursor)
 	}
 
 	return prs
