@@ -49,7 +49,7 @@ func scoreRepository(w http.ResponseWriter, r *http.Request, params httprouter.P
 		log.Panic(err)
 	}
 	issueScore := repohealth.GetIssueScore(client, org, name, numWeeks)
-	prScore := repohealth.GetPRScore(client, org, name, numWeeks)
-	repoScore := repohealth.RepositoryScore{Issues: issueScore, PRs: prScore}
+	prScore, ciScore := repohealth.GetPRScore(client, org, name, numWeeks)
+	repoScore := repohealth.RepositoryScore{Issues: issueScore, PRs: prScore, CI: ciScore}
 	json.NewEncoder(w).Encode(repoScore)
 }
