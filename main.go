@@ -51,5 +51,7 @@ func scoreRepository(w http.ResponseWriter, r *http.Request, params httprouter.P
 	issueScore := repohealth.GetIssueScore(client, org, name, numWeeks)
 	prScore, ciScore := repohealth.GetPRScore(client, org, name, numWeeks)
 	repoScore := repohealth.RepositoryScore{Issues: issueScore, PRs: prScore, CI: ciScore}
+	// TODO(gracew): remove once there's a proper dev setup
+	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(repoScore)
 }
