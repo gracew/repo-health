@@ -108,8 +108,17 @@ type prDates struct {
 const pageSize = 100 // default is 30
 const dateFormat = "2006-01-02"
 
-func GetIssueScore(client *graphql.Client, owner string, name string, numWeeks int) []WeeklyIssueMetrics {
+// returns the first Sunday after (today - numWeeks)
+func getStartDate(numWeeks int) time.Time {
 	since := time.Now().AddDate(0, 0, -7*numWeeks)
+	for since.Weekday() != 0 {
+		since = since.AddDate(0, 0, 1)
+	}
+	return since
+}
+
+func GetIssueScore(client *graphql.Client, owner string, name string, numWeeks int) []WeeklyIssueMetrics {
+	since := getStartDate(numWeeks)
 	issues := getIssuesCreatedSince(client, owner, name, since)
 
 	weekToNumIssuesOpened := map[int]int{}
@@ -121,17 +130,15 @@ func GetIssueScore(client *graphql.Client, owner string, name string, numWeeks i
 		createdWeek := int(issue.CreatedAt.Sub(since).Seconds()) / secondsInWeek
 		weekToNumIssuesOpened[createdWeek]++
 
-		resolutionTime := -1
 		if issue.ClosedAt.After(since) {
 			closedWeek := int(issue.ClosedAt.Sub(since).Seconds()) / secondsInWeek
 			weekToNumIssuesClosed[closedWeek]++
-			resolutionTime = int(issue.ClosedAt.Sub(issue.CreatedAt).Seconds())
+			weekToIssueDetails[closedWeek] = append(weekToIssueDetails[closedWeek], IssueDetails{
+				Issue:          issue.Number,
+				ResolutionTime: int(issue.ClosedAt.Sub(issue.CreatedAt).Seconds()),
+			})
 		}
 
-		weekToIssueDetails[createdWeek] = append(weekToIssueDetails[createdWeek], IssueDetails{
-			Issue:          issue.Number,
-			ResolutionTime: resolutionTime,
-		})
 	}
 
 	metrics := []WeeklyIssueMetrics{}
@@ -190,7 +197,7 @@ func getIssuesCreatedSince(client *graphql.Client, owner string, name string, si
 }
 
 func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int) ([]WeeklyPRMetrics, []WeeklyCIMetrics) {
-	since := time.Now().AddDate(0, 0, -7*numWeeks)
+	since := getStartDate(numWeeks)
 	prs := getPRsCreatedSince(client, owner, name, since)
 
 	weekToNumPRsOpened := map[int]int{}
@@ -204,7 +211,6 @@ func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int)
 		createdWeek := int(pr.CreatedAt.Sub(since).Seconds()) / secondsInWeek
 		weekToNumPRsOpened[createdWeek]++
 
-		resolutionTime := -1
 		if pr.ClosedAt.After(since) {
 			closedWeek := int(pr.ClosedAt.Sub(since).Seconds()) / secondsInWeek
 			if pr.Merged {
@@ -212,13 +218,12 @@ func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int)
 			} else {
 				weekToNumPRsRejected[closedWeek]++
 			}
-			resolutionTime = int(pr.ClosedAt.Sub(pr.CreatedAt).Seconds())
+			weekToPRDetails[closedWeek] = append(weekToPRDetails[closedWeek], PRDetails{
+				PR:             pr.Number,
+				ResolutionTime: int(pr.ClosedAt.Sub(pr.CreatedAt).Seconds()),
+				NumReviews:     pr.Reviews.TotalCount,
+			})
 		}
-		weekToPRDetails[createdWeek] = append(weekToPRDetails[createdWeek], PRDetails{
-			PR:             pr.Number,
-			ResolutionTime: resolutionTime,
-			NumReviews:     pr.Reviews.TotalCount,
-		})
 
 		latestPRCommit := pr.Commits.Nodes[0].Commit
 		var statusStartDate time.Time
