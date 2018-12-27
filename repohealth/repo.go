@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/machinebox/graphql"
-	"github.com/montanaflynn/stats"
 )
 
 type RepositoryScore struct {
@@ -16,26 +15,40 @@ type RepositoryScore struct {
 }
 
 type WeeklyIssueMetrics struct {
-	Week             string `json:"week"`
-	NumClosed        int    `json:"closed"`
-	NumOpen          int    `json:"opened"`
-	TimeToResponse   []int  `json:"timeToResponse"`   // in sec
-	TimeToResolution []int  `json:"timeToResolution"` // in sec
+	Week      string         `json:"week"`
+	NumClosed int            `json:"closed"`
+	NumOpen   int            `json:"opened"`
+	Details   []IssueDetails `json:"details"`
+}
+
+type IssueDetails struct {
+	Issue          int `json:"issue"`
+	ResolutionTime int `json:"resolutionTime"` // in sec
 }
 
 type WeeklyPRMetrics struct {
-	Week             string `json:"week"`
-	NumMerged        int    `json:"merged"`
-	NumRejected      int    `json:"rejected"`
-	NumOpen          int    `json:"opened"`
-	NumReviews       int    `json:"numReviews"`
-	TimeToResponse   []int  `json:"timeToResponse"`   // in sec
-	TimeToResolution []int  `json:"timeToResolution"` // in sec
+	Week        string      `json:"week"`
+	NumMerged   int         `json:"merged"`
+	NumRejected int         `json:"rejected"`
+	NumOpen     int         `json:"opened"`
+	Details     []PRDetails `json:"details"`
+}
+
+type PRDetails struct {
+	PR             int `json:"pr"`
+	ResolutionTime int `json:"resolutionTime"` // in sec
+	NumReviews     int `json:"reviews"`
 }
 
 type WeeklyCIMetrics struct {
-	Week        string `json:"week"`
-	BuildTime50 int    `json:"buildTime50"` // in sec
+	Week    string      `json:"week"`
+	Details []CIDetails `json:"details"`
+}
+
+type CIDetails struct {
+	PR               int    `json:"pr"`
+	MaxCheckName     string `json:"maxCheckName"`
+	MaxCheckDuration int    `json:"maxCheckDuration"` // in sec
 }
 
 type issueDatesResponse struct {
@@ -73,7 +86,10 @@ type prDates struct {
 	ClosedAt          time.Time
 	Merged            bool
 	IsCrossRepository bool
-	Commits           struct {
+	Reviews           struct {
+		TotalCount int
+	}
+	Commits struct {
 		Nodes []struct {
 			Commit struct {
 				CommittedDate time.Time
@@ -98,16 +114,24 @@ func GetIssueScore(client *graphql.Client, owner string, name string, numWeeks i
 
 	weekToNumIssuesOpened := map[int]int{}
 	weekToNumIssuesClosed := map[int]int{}
+	weekToIssueDetails := map[int][]IssueDetails{}
 
 	secondsInWeek := 60 * 60 * 24 * 7
 	for _, issue := range issues {
-		week := int(issue.CreatedAt.Sub(since).Seconds()) / secondsInWeek
-		weekToNumIssuesOpened[week]++
+		createdWeek := int(issue.CreatedAt.Sub(since).Seconds()) / secondsInWeek
+		weekToNumIssuesOpened[createdWeek]++
 
+		resolutionTime := -1
 		if issue.ClosedAt.After(since) {
-			week := int(issue.ClosedAt.Sub(since).Seconds()) / secondsInWeek
-			weekToNumIssuesClosed[week]++
+			closedWeek := int(issue.ClosedAt.Sub(since).Seconds()) / secondsInWeek
+			weekToNumIssuesClosed[closedWeek]++
+			resolutionTime = int(issue.ClosedAt.Sub(issue.CreatedAt).Seconds())
 		}
+
+		weekToIssueDetails[createdWeek] = append(weekToIssueDetails[createdWeek], IssueDetails{
+			Issue:          issue.Number,
+			ResolutionTime: resolutionTime,
+		})
 	}
 
 	metrics := []WeeklyIssueMetrics{}
@@ -116,6 +140,7 @@ func GetIssueScore(client *graphql.Client, owner string, name string, numWeeks i
 			Week:      since.AddDate(0, 0, week*7).Format(dateFormat),
 			NumOpen:   weekToNumIssuesOpened[week],
 			NumClosed: weekToNumIssuesClosed[week],
+			Details:   weekToIssueDetails[week],
 		})
 	}
 	return metrics
@@ -171,13 +196,15 @@ func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int)
 	weekToNumPRsOpened := map[int]int{}
 	weekToNumPRsMerged := map[int]int{}
 	weekToNumPRsRejected := map[int]int{}
-	weekToCITimes := map[int][]float64{}
+	weekToPRDetails := map[int][]PRDetails{}
+	weekToCIDetails := map[int][]CIDetails{}
 
 	secondsInWeek := 60 * 60 * 24 * 7
 	for _, pr := range prs {
 		createdWeek := int(pr.CreatedAt.Sub(since).Seconds()) / secondsInWeek
 		weekToNumPRsOpened[createdWeek]++
 
+		resolutionTime := -1
 		if pr.ClosedAt.After(since) {
 			closedWeek := int(pr.ClosedAt.Sub(since).Seconds()) / secondsInWeek
 			if pr.Merged {
@@ -185,22 +212,37 @@ func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int)
 			} else {
 				weekToNumPRsRejected[closedWeek]++
 			}
+			resolutionTime = int(pr.ClosedAt.Sub(pr.CreatedAt).Seconds())
 		}
+		weekToPRDetails[createdWeek] = append(weekToPRDetails[createdWeek], PRDetails{
+			PR:             pr.Number,
+			ResolutionTime: resolutionTime,
+			NumReviews:     pr.Reviews.TotalCount,
+		})
 
 		latestPRCommit := pr.Commits.Nodes[0].Commit
 		var statusStartDate time.Time
 		if pr.IsCrossRepository {
 			// pushed date is unavailable for PRs made from forks; use the commit date instead
-			statusStartDate = latestPRCommit.CommittedDate
+			if pr.CreatedAt.After(latestPRCommit.CommittedDate) {
+				// first commit; build isn't triggered until PR creation so use that date
+				statusStartDate = pr.CreatedAt
+			} else {
+				// not ideal in case commit is made awhile before pushing. however, updatedAt also includes comments,
+				// reviews, etc. can possibly traverse PR timeline to get a more accurate date
+				statusStartDate = latestPRCommit.CommittedDate
+			}
 		} else {
 			statusStartDate = latestPRCommit.PushedDate
 		}
 
 		maxCheckDuration := 0
+		var maxCheckContext string
 		for _, context := range latestPRCommit.Status.Contexts {
 			duration := int(context.CreatedAt.Sub(statusStartDate).Seconds())
 			if duration > maxCheckDuration {
 				maxCheckDuration = duration
+				maxCheckContext = context.Context
 			}
 		}
 		statusStartWeek := int(statusStartDate.Sub(since).Seconds()) / secondsInWeek
@@ -208,7 +250,11 @@ func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int)
 			// commit may have been pushed before the PR was created; in this case use the PR creation date
 			statusStartWeek = createdWeek
 		}
-		weekToCITimes[statusStartWeek] = append(weekToCITimes[statusStartWeek], float64(maxCheckDuration))
+		weekToCIDetails[statusStartWeek] = append(weekToCIDetails[statusStartWeek], CIDetails{
+			PR:               pr.Number,
+			MaxCheckName:     maxCheckContext,
+			MaxCheckDuration: maxCheckDuration,
+		})
 	}
 
 	prMetrics := []WeeklyPRMetrics{}
@@ -219,16 +265,12 @@ func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int)
 			NumOpen:     weekToNumPRsOpened[week],
 			NumRejected: weekToNumPRsRejected[week],
 			NumMerged:   weekToNumPRsMerged[week],
+			Details:     weekToPRDetails[week],
 		})
 
-		medianBuildTime, err := stats.Percentile(weekToCITimes[week], 50)
-		if err != nil {
-			// log error, but continue -- medianBuildTime will be NaN
-			log.Println(err)
-		}
 		ciMetrics = append(ciMetrics, WeeklyCIMetrics{
-			Week:        since.AddDate(0, 0, week*7).Format(dateFormat),
-			BuildTime50: int(medianBuildTime),
+			Week:    since.AddDate(0, 0, week*7).Format(dateFormat),
+			Details: weekToCIDetails[week],
 		})
 	}
 
@@ -247,6 +289,9 @@ func getPRsCreatedSince(client *graphql.Client, owner string, name string, since
 						closedAt
 						merged
 						isCrossRepository
+						reviews(first: 1) {
+							totalCount
+						}
 						commits(last: 1) {
 							nodes {
 								commit {
