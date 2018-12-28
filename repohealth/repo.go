@@ -22,8 +22,10 @@ type WeeklyIssueMetrics struct {
 }
 
 type IssueDetails struct {
-	Issue          int `json:"issue"`
-	ResolutionTime int `json:"resolutionTime"` // in sec
+	Issue          int    `json:"issue"`
+	Title          string `json:"title"`
+	URL            string `json:"url"`
+	ResolutionTime int    `json:"resolutionTime"` // in sec
 }
 
 type WeeklyPRMetrics struct {
@@ -35,9 +37,11 @@ type WeeklyPRMetrics struct {
 }
 
 type PRDetails struct {
-	PR             int `json:"pr"`
-	ResolutionTime int `json:"resolutionTime"` // in sec
-	NumReviews     int `json:"reviews"`
+	PR             int    `json:"pr"`
+	Title          string `json:"title"`
+	URL            string `json:"url"`
+	ResolutionTime int    `json:"resolutionTime"` // in sec
+	NumReviews     int    `json:"reviews"`
 }
 
 type WeeklyCIMetrics struct {
@@ -49,6 +53,7 @@ type CIDetails struct {
 	PR               int    `json:"pr"`
 	MaxCheckName     string `json:"maxCheckName"`
 	MaxCheckDuration int    `json:"maxCheckDuration"` // in sec
+	URL              string `json:"url"`
 }
 
 type issueDatesResponse struct {
@@ -62,6 +67,8 @@ type issueDatesResponse struct {
 
 type issueDates struct {
 	Number    int
+	Title     string
+	URL       string
 	CreatedAt time.Time
 	ClosedAt  time.Time
 }
@@ -82,6 +89,8 @@ type prDatesResponse struct {
 
 type prDates struct {
 	Number            int
+	Title             string
+	URL               string
 	CreatedAt         time.Time
 	ClosedAt          time.Time
 	Merged            bool
@@ -95,14 +104,17 @@ type prDates struct {
 				CommittedDate time.Time
 				PushedDate    time.Time
 				Status        struct {
-					Contexts []struct {
-						Context   string
-						CreatedAt time.Time
-					}
+					Contexts []checkContext
 				}
 			}
 		}
 	}
+}
+
+type checkContext struct {
+	Context   string
+	CreatedAt time.Time
+	TargetURL string
 }
 
 const pageSize = 100 // default is 30
@@ -135,6 +147,8 @@ func GetIssueScore(client *graphql.Client, owner string, name string, numWeeks i
 			weekToNumIssuesClosed[closedWeek]++
 			weekToIssueDetails[closedWeek] = append(weekToIssueDetails[closedWeek], IssueDetails{
 				Issue:          issue.Number,
+				Title:          issue.Title,
+				URL:            issue.URL,
 				ResolutionTime: int(issue.ClosedAt.Sub(issue.CreatedAt).Seconds()),
 			})
 		}
@@ -160,6 +174,8 @@ func getIssuesCreatedSince(client *graphql.Client, owner string, name string, si
 		 		issues(first: $pageSize, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) {
 					nodes {
 						number
+						title
+						url
 						createdAt
 						closedAt
 					}
@@ -220,6 +236,8 @@ func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int)
 			}
 			weekToPRDetails[closedWeek] = append(weekToPRDetails[closedWeek], PRDetails{
 				PR:             pr.Number,
+				Title:          pr.Title,
+				URL:            pr.URL,
 				ResolutionTime: int(pr.ClosedAt.Sub(pr.CreatedAt).Seconds()),
 				NumReviews:     pr.Reviews.TotalCount,
 			})
@@ -242,12 +260,12 @@ func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int)
 		}
 
 		maxCheckDuration := 0
-		var maxCheckContext string
+		var maxCheckContext checkContext
 		for _, context := range latestPRCommit.Status.Contexts {
 			duration := int(context.CreatedAt.Sub(statusStartDate).Seconds())
 			if duration > maxCheckDuration {
 				maxCheckDuration = duration
-				maxCheckContext = context.Context
+				maxCheckContext = context
 			}
 		}
 		statusStartWeek := int(statusStartDate.Sub(since).Seconds()) / secondsInWeek
@@ -257,8 +275,9 @@ func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int)
 		}
 		weekToCIDetails[statusStartWeek] = append(weekToCIDetails[statusStartWeek], CIDetails{
 			PR:               pr.Number,
-			MaxCheckName:     maxCheckContext,
+			MaxCheckName:     maxCheckContext.Context,
 			MaxCheckDuration: maxCheckDuration,
+			URL:              maxCheckContext.TargetURL,
 		})
 	}
 
@@ -290,6 +309,8 @@ func getPRsCreatedSince(client *graphql.Client, owner string, name string, since
 		 		pullRequests(first: $pageSize, after: $after, orderBy: {field: CREATED_AT, direction: DESC}, baseRefName: "master") {
 					nodes {
 						number
+						title
+						url
 						createdAt
 						closedAt
 						merged
@@ -306,7 +327,7 @@ func getPRsCreatedSince(client *graphql.Client, owner string, name string, since
 										contexts {
 											context
 											createdAt
-											state
+											targetUrl
 										}
 									}
 								}
