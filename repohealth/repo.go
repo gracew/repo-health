@@ -23,6 +23,7 @@ type WeeklyIssueMetrics struct {
 
 type IssueDetails struct {
 	Issue          int    `json:"issue"`
+	Title          string `json:"title"`
 	URL            string `json:"url"`
 	ResolutionTime int    `json:"resolutionTime"` // in sec
 }
@@ -37,6 +38,7 @@ type WeeklyPRMetrics struct {
 
 type PRDetails struct {
 	PR             int    `json:"pr"`
+	Title          string `json:"title"`
 	URL            string `json:"url"`
 	ResolutionTime int    `json:"resolutionTime"` // in sec
 	NumReviews     int    `json:"reviews"`
@@ -65,6 +67,7 @@ type issueDatesResponse struct {
 
 type issueDates struct {
 	Number    int
+	Title     string
 	URL       string
 	CreatedAt time.Time
 	ClosedAt  time.Time
@@ -86,6 +89,7 @@ type prDatesResponse struct {
 
 type prDates struct {
 	Number            int
+	Title             string
 	URL               string
 	CreatedAt         time.Time
 	ClosedAt          time.Time
@@ -143,6 +147,7 @@ func GetIssueScore(client *graphql.Client, owner string, name string, numWeeks i
 			weekToNumIssuesClosed[closedWeek]++
 			weekToIssueDetails[closedWeek] = append(weekToIssueDetails[closedWeek], IssueDetails{
 				Issue:          issue.Number,
+				Title:          issue.Title,
 				URL:            issue.URL,
 				ResolutionTime: int(issue.ClosedAt.Sub(issue.CreatedAt).Seconds()),
 			})
@@ -169,6 +174,7 @@ func getIssuesCreatedSince(client *graphql.Client, owner string, name string, si
 		 		issues(first: $pageSize, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) {
 					nodes {
 						number
+						title
 						url
 						createdAt
 						closedAt
@@ -230,6 +236,7 @@ func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int)
 			}
 			weekToPRDetails[closedWeek] = append(weekToPRDetails[closedWeek], PRDetails{
 				PR:             pr.Number,
+				Title:          pr.Title,
 				URL:            pr.URL,
 				ResolutionTime: int(pr.ClosedAt.Sub(pr.CreatedAt).Seconds()),
 				NumReviews:     pr.Reviews.TotalCount,
@@ -302,6 +309,7 @@ func getPRsCreatedSince(client *graphql.Client, owner string, name string, since
 		 		pullRequests(first: $pageSize, after: $after, orderBy: {field: CREATED_AT, direction: DESC}, baseRefName: "master") {
 					nodes {
 						number
+						title
 						url
 						createdAt
 						closedAt
