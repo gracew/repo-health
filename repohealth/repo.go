@@ -197,7 +197,7 @@ func getIssuesCreatedSince(client *graphql.Client, authHeader string, owner stri
 	req.Var("name", name)
 	req.Var("pageSize", pageSize)
 	req.Var("after", nil)
-	req.Header["Authorization"] = append(req.Header["Authorization"], authHeader)
+	req.Header.Set("Authorization", authHeader)
 
 	var issues []issueDates
 	getNextPage := true
@@ -356,7 +356,7 @@ func getPRsCreatedSince(client *graphql.Client, authHeader string, owner string,
 	req.Var("name", name)
 	req.Var("pageSize", pageSize)
 	req.Var("after", nil)
-	req.Header["Authorization"] = append(req.Header["Authorization"], authHeader)
+	req.Header.Set("Authorization", authHeader)
 
 	var prs []prDates
 	getNextPage := true

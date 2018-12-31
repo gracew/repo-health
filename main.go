@@ -66,7 +66,7 @@ func scoreRepository(w http.ResponseWriter, r *http.Request, params httprouter.P
 	client := graphql.NewClient("https://api.github.com/graphql")
 
 	// TODO(gracew): if there's no auth header then return a 403...
-	authHeader := r.Header["Authorization"][0]
+	authHeader := r.Header.Get("Authorization")
 
 	org := params.ByName("org")
 	name := params.ByName("name")
