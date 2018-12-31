@@ -22,10 +22,11 @@ type WeeklyIssueMetrics struct {
 }
 
 type IssueDetails struct {
-	Issue          int    `json:"issue"`
+	Number         int    `json:"number"`
 	Title          string `json:"title"`
 	URL            string `json:"url"`
-	ResolutionTime int    `json:"resolutionTime"` // in sec
+	ResolutionTime int    `json:"resolutionTime"` // in sec, will be -1 if issue has not yet been resolved
+	State          string `json:"state"`
 }
 
 type WeeklyPRMetrics struct {
@@ -37,11 +38,12 @@ type WeeklyPRMetrics struct {
 }
 
 type PRDetails struct {
-	PR             int    `json:"pr"`
+	Number         int    `json:"number"`
 	Title          string `json:"title"`
 	URL            string `json:"url"`
-	ResolutionTime int    `json:"resolutionTime"` // in sec
+	ResolutionTime int    `json:"resolutionTime"` // in sec, will be -1 if PR has not yet been resolved
 	NumReviews     int    `json:"reviews"`
+	State          string `json:"state"`
 }
 
 type WeeklyCIMetrics struct {
@@ -51,9 +53,10 @@ type WeeklyCIMetrics struct {
 
 type CIDetails struct {
 	PR               int    `json:"pr"`
+	PRURL            string `json:"prUrl"`
 	MaxCheckName     string `json:"maxCheckName"`
 	MaxCheckDuration int    `json:"maxCheckDuration"` // in sec
-	URL              string `json:"url"`
+	MaxCheckURL      string `json:"maxCheckUrl"`
 }
 
 type issueDatesResponse struct {
@@ -69,6 +72,7 @@ type issueDates struct {
 	Number    int
 	Title     string
 	URL       string
+	State     string
 	CreatedAt time.Time
 	ClosedAt  time.Time
 }
@@ -91,6 +95,7 @@ type prDates struct {
 	Number            int
 	Title             string
 	URL               string
+	State             string
 	CreatedAt         time.Time
 	ClosedAt          time.Time
 	Merged            bool
@@ -129,9 +134,9 @@ func getStartDate(numWeeks int) time.Time {
 	return since
 }
 
-func GetIssueScore(client *graphql.Client, owner string, name string, numWeeks int) []WeeklyIssueMetrics {
+func GetIssueScore(client *graphql.Client, authHeader string, owner string, name string, numWeeks int) []WeeklyIssueMetrics {
 	since := getStartDate(numWeeks)
-	issues := getIssuesCreatedSince(client, owner, name, since)
+	issues := getIssuesCreatedSince(client, authHeader, owner, name, since)
 
 	weekToNumIssuesOpened := map[int]int{}
 	weekToNumIssuesClosed := map[int]int{}
@@ -145,8 +150,8 @@ func GetIssueScore(client *graphql.Client, owner string, name string, numWeeks i
 		if issue.ClosedAt.After(since) {
 			closedWeek := int(issue.ClosedAt.Sub(since).Seconds()) / secondsInWeek
 			weekToNumIssuesClosed[closedWeek]++
-			weekToIssueDetails[closedWeek] = append(weekToIssueDetails[closedWeek], IssueDetails{
-				Issue:          issue.Number,
+			weekToIssueDetails[createdWeek] = append(weekToIssueDetails[createdWeek], IssueDetails{
+				Number:         issue.Number,
 				Title:          issue.Title,
 				URL:            issue.URL,
 				ResolutionTime: int(issue.ClosedAt.Sub(issue.CreatedAt).Seconds()),
@@ -167,7 +172,7 @@ func GetIssueScore(client *graphql.Client, owner string, name string, numWeeks i
 	return metrics
 }
 
-func getIssuesCreatedSince(client *graphql.Client, owner string, name string, since time.Time) []issueDates {
+func getIssuesCreatedSince(client *graphql.Client, authHeader string, owner string, name string, since time.Time) []issueDates {
 	req := graphql.NewRequest(`
 		query ($owner: String!, $name: String!, $pageSize: Int!, $after: String) {
 			repository(owner: $owner, name: $name) {
@@ -176,6 +181,7 @@ func getIssuesCreatedSince(client *graphql.Client, owner string, name string, si
 						number
 						title
 						url
+						state
 						createdAt
 						closedAt
 					}
@@ -191,13 +197,14 @@ func getIssuesCreatedSince(client *graphql.Client, owner string, name string, si
 	req.Var("name", name)
 	req.Var("pageSize", pageSize)
 	req.Var("after", nil)
+	req.Header["Authorization"] = append(req.Header["Authorization"], authHeader)
 
 	var issues []issueDates
 	getNextPage := true
 	for getNextPage {
 		var res issueDatesResponse
 		if err := client.Run(context.Background(), req, &res); err != nil {
-			log.Panic(err)
+			log.Panicln(err)
 		}
 		newIssues := res.Repository.Issues.Nodes
 		lastIndex := len(newIssues)
@@ -212,9 +219,9 @@ func getIssuesCreatedSince(client *graphql.Client, owner string, name string, si
 	return issues
 }
 
-func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int) ([]WeeklyPRMetrics, []WeeklyCIMetrics) {
+func GetPRScore(client *graphql.Client, authHeader string, owner string, name string, numWeeks int) ([]WeeklyPRMetrics, []WeeklyCIMetrics) {
 	since := getStartDate(numWeeks)
-	prs := getPRsCreatedSince(client, owner, name, since)
+	prs := getPRsCreatedSince(client, authHeader, owner, name, since)
 
 	weekToNumPRsOpened := map[int]int{}
 	weekToNumPRsMerged := map[int]int{}
@@ -234,10 +241,11 @@ func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int)
 			} else {
 				weekToNumPRsRejected[closedWeek]++
 			}
-			weekToPRDetails[closedWeek] = append(weekToPRDetails[closedWeek], PRDetails{
-				PR:             pr.Number,
+			weekToPRDetails[createdWeek] = append(weekToPRDetails[createdWeek], PRDetails{
+				Number:         pr.Number,
 				Title:          pr.Title,
 				URL:            pr.URL,
+				State:          pr.State,
 				ResolutionTime: int(pr.ClosedAt.Sub(pr.CreatedAt).Seconds()),
 				NumReviews:     pr.Reviews.TotalCount,
 			})
@@ -275,9 +283,10 @@ func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int)
 		}
 		weekToCIDetails[statusStartWeek] = append(weekToCIDetails[statusStartWeek], CIDetails{
 			PR:               pr.Number,
+			PRURL:            pr.URL,
 			MaxCheckName:     maxCheckContext.Context,
 			MaxCheckDuration: maxCheckDuration,
-			URL:              maxCheckContext.TargetURL,
+			MaxCheckURL:      maxCheckContext.TargetURL,
 		})
 	}
 
@@ -301,7 +310,7 @@ func GetPRScore(client *graphql.Client, owner string, name string, numWeeks int)
 	return prMetrics, ciMetrics
 }
 
-func getPRsCreatedSince(client *graphql.Client, owner string, name string, since time.Time) []prDates {
+func getPRsCreatedSince(client *graphql.Client, authHeader string, owner string, name string, since time.Time) []prDates {
 	// TODO(gracew): look up the repo's default branch and use that in the query
 	req := graphql.NewRequest(`
 		query ($owner: String!, $name: String!, $pageSize: Int!, $after: String) {
@@ -311,6 +320,7 @@ func getPRsCreatedSince(client *graphql.Client, owner string, name string, since
 						number
 						title
 						url
+						state
 						createdAt
 						closedAt
 						merged
@@ -346,13 +356,14 @@ func getPRsCreatedSince(client *graphql.Client, owner string, name string, since
 	req.Var("name", name)
 	req.Var("pageSize", pageSize)
 	req.Var("after", nil)
+	req.Header["Authorization"] = append(req.Header["Authorization"], authHeader)
 
 	var prs []prDates
 	getNextPage := true
 	for getNextPage {
 		var res prDatesResponse
 		if err := client.Run(context.Background(), req, &res); err != nil {
-			log.Panic(err)
+			log.Panicln(err)
 		}
 		newPrs := res.Repository.PullRequests.Nodes
 		lastIndex := len(newPrs)

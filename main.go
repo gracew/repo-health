@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -10,46 +12,72 @@ import (
 	"github.com/gracew/repo-health/repohealth"
 	"github.com/julienschmidt/httprouter"
 	"github.com/machinebox/graphql"
-
-	"golang.org/x/oauth2"
 )
 
 func main() {
 	router := httprouter.New()
-	router.GET("/:org/:name/score", scoreRepository)
+	router.GET("/login", login)
+	router.GET("/repos/:org/:name", scoreRepository)
 	if err := http.ListenAndServe(":8080", router); err != nil {
 		panic(err)
 	}
 }
 
-// copied from https://blog.kowalczyk.info/article/f/accessing-github-api-from-go.html
-type TokenSource struct {
-	AccessToken string
+type githubTokenRequest struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+	Code         string `json:"code"`
+	State        string `json:"state"`
 }
 
-func (t *TokenSource) Token() (*oauth2.Token, error) {
-	token := &oauth2.Token{
-		AccessToken: t.AccessToken,
+func login(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
+	queryValues := r.URL.Query()
+	data, err := json.Marshal(githubTokenRequest{
+		ClientID:     os.Getenv("CLIENT_ID"),
+		ClientSecret: os.Getenv("CLIENT_SECRET"),
+		Code:         queryValues.Get("code"),
+		State:        queryValues.Get("state"),
+	})
+	if err != nil {
+		log.Panicln(err)
 	}
-	return token, nil
+
+	req, err := http.NewRequest("POST", "https://github.com/login/oauth/access_token", bytes.NewBuffer(data))
+	if err != nil {
+		log.Panicln(err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{}
+	res, err := client.Do(req)
+	if err != nil {
+		log.Panicln(err)
+	}
+	// TODO(gracew): remove once there's a proper dev setup
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	bytes, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		log.Panicln(err)
+	}
+	w.Write(bytes)
 }
 
 func scoreRepository(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
-	tokenSource := &TokenSource{
-		AccessToken: os.Getenv("ACCESS_TOKEN"),
-	}
-	oauthClient := oauth2.NewClient(oauth2.NoContext, tokenSource)
-	client := graphql.NewClient("https://api.github.com/graphql", graphql.WithHTTPClient(oauthClient))
+	client := graphql.NewClient("https://api.github.com/graphql")
+
+	// TODO(gracew): if there's no auth header then return a 403...
+	authHeader := r.Header["Authorization"][0]
 
 	org := params.ByName("org")
 	name := params.ByName("name")
 	queryValues := r.URL.Query()
 	numWeeks, err := strconv.Atoi(queryValues.Get("weeks"))
 	if err != nil {
-		log.Panic(err)
+		log.Panicln(err)
 	}
-	issueScore := repohealth.GetIssueScore(client, org, name, numWeeks)
-	prScore, ciScore := repohealth.GetPRScore(client, org, name, numWeeks)
+
+	issueScore := repohealth.GetIssueScore(client, authHeader, org, name, numWeeks)
+	prScore, ciScore := repohealth.GetPRScore(client, authHeader, org, name, numWeeks)
 	repoScore := repohealth.RepositoryScore{Issues: issueScore, PRs: prScore, CI: ciScore}
 	// TODO(gracew): remove once there's a proper dev setup
 	w.Header().Set("Access-Control-Allow-Origin", "*")
