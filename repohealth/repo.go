@@ -82,54 +82,6 @@ type pageInfo struct {
 	HasNextPage bool
 }
 
-type defaultBranchResponse struct {
-	Repository struct {
-		DefaultBranchRef struct {
-			Name string
-		}
-	}
-}
-
-type prDatesResponse struct {
-	Repository struct {
-		PullRequests struct {
-			Nodes    []prDates
-			PageInfo pageInfo
-		}
-	}
-}
-
-type prDates struct {
-	Number            int
-	Title             string
-	URL               string
-	State             string
-	CreatedAt         time.Time
-	ClosedAt          time.Time
-	Merged            bool
-	IsCrossRepository bool
-	Reviews           struct {
-		TotalCount int
-	}
-	Commits struct {
-		Nodes []struct {
-			Commit struct {
-				CommittedDate time.Time
-				PushedDate    time.Time
-				Status        struct {
-					Contexts []checkContext
-				}
-			}
-		}
-	}
-}
-
-type checkContext struct {
-	Context   string
-	CreatedAt time.Time
-	TargetURL string
-}
-
 const pageSize = 100 // default is 30
 const dateFormat = "2006-01-02"
 
@@ -228,16 +180,19 @@ func getIssuesCreatedSince(client *graphql.Client, authHeader string, owner stri
 	return issues
 }
 
-func GetPRScore(client *graphql.Client, authHeader string, owner string, name string, numWeeks int) ([]WeeklyPRMetrics, []WeeklyCIMetrics) {
+func GetRepoPRAndCIScores(client *graphql.Client, authHeader string, owner string, name string, numWeeks int) ([]WeeklyPRMetrics, []WeeklyCIMetrics) {
 	since := getStartDate(numWeeks)
-	prs := getPRsCreatedSince(client, authHeader, owner, name, since)
+	prs := getRepoPRsCreatedSince(client, authHeader, owner, name, since)
+	prMetrics := GetPRScore(prs, since, numWeeks)
+	ciMetrics := GetCIScore(prs, since, numWeeks)
+	return prMetrics, ciMetrics
+}
 
+func GetPRScore(prs []pr, since time.Time, numWeeks int) []WeeklyPRMetrics {
 	weekToNumPRsOpened := map[int]int{}
 	weekToNumPRsMerged := map[int]int{}
 	weekToNumPRsRejected := map[int]int{}
 	weekToPRDetails := map[int][]PRDetails{}
-	weekToCIDetails := map[int][]CIDetails{}
-
 	secondsInWeek := 60 * 60 * 24 * 7
 	for _, pr := range prs {
 		createdWeek := int(pr.CreatedAt.Sub(since).Seconds()) / secondsInWeek
@@ -259,7 +214,28 @@ func GetPRScore(client *graphql.Client, authHeader string, owner string, name st
 				NumReviews:     pr.Reviews.TotalCount,
 			})
 		}
+	}
 
+	prMetrics := []WeeklyPRMetrics{}
+	for week := 0; week < numWeeks; week++ {
+		prMetrics = append(prMetrics, WeeklyPRMetrics{
+			Week:        since.AddDate(0, 0, week*7).Format(dateFormat),
+			NumOpen:     weekToNumPRsOpened[week],
+			NumRejected: weekToNumPRsRejected[week],
+			NumMerged:   weekToNumPRsMerged[week],
+			Details:     weekToPRDetails[week],
+		})
+	}
+
+	return prMetrics
+}
+
+func GetCIScore(prs []pr, since time.Time, numWeeks int) []WeeklyCIMetrics {
+	weekToCIDetails := map[int][]CIDetails{}
+
+	secondsInWeek := 60 * 60 * 24 * 7
+	for _, pr := range prs {
+		createdWeek := int(pr.CreatedAt.Sub(since).Seconds()) / secondsInWeek
 		latestPRCommit := pr.Commits.Nodes[0].Commit
 		var statusStartDate time.Time
 		if pr.IsCrossRepository {
@@ -299,108 +275,13 @@ func GetPRScore(client *graphql.Client, authHeader string, owner string, name st
 		})
 	}
 
-	prMetrics := []WeeklyPRMetrics{}
 	ciMetrics := []WeeklyCIMetrics{}
 	for week := 0; week < numWeeks; week++ {
-		prMetrics = append(prMetrics, WeeklyPRMetrics{
-			Week:        since.AddDate(0, 0, week*7).Format(dateFormat),
-			NumOpen:     weekToNumPRsOpened[week],
-			NumRejected: weekToNumPRsRejected[week],
-			NumMerged:   weekToNumPRsMerged[week],
-			Details:     weekToPRDetails[week],
-		})
-
 		ciMetrics = append(ciMetrics, WeeklyCIMetrics{
 			Week:    since.AddDate(0, 0, week*7).Format(dateFormat),
 			Details: weekToCIDetails[week],
 		})
 	}
 
-	return prMetrics, ciMetrics
-}
-
-func getPRsCreatedSince(client *graphql.Client, authHeader string, owner string, name string, since time.Time) []prDates {
-	defaultBranchReq := graphql.NewRequest(`
-		query ($owner: String!, $name: String!) {
-			repository(owner: $owner, name: $name) {
-				defaultBranchRef {
-					name
-				}
-			}
-		}
-	`)
-	defaultBranchReq.Var("owner", owner)
-	defaultBranchReq.Var("name", name)
-	defaultBranchReq.Header.Set("Authorization", authHeader)
-
-	var defaultBranchRes defaultBranchResponse
-	if err := client.Run(context.Background(), defaultBranchReq, &defaultBranchRes); err != nil {
-		log.Panicln(err)
-	}
-
-	req := graphql.NewRequest(`
-		query ($owner: String!, $name: String!, $pageSize: Int!, $after: String, $defaultBranch: String!) {
-			repository(owner: $owner, name: $name) {
-		 		pullRequests(first: $pageSize, after: $after, orderBy: {field: CREATED_AT, direction: DESC}, baseRefName: $defaultBranch) {
-					nodes {
-						number
-						title
-						url
-						state
-						createdAt
-						closedAt
-						merged
-						isCrossRepository
-						reviews(first: 1) {
-							totalCount
-						}
-						commits(last: 1) {
-							nodes {
-								commit {
-									committedDate
-									pushedDate
-									status {
-										contexts {
-											context
-											createdAt
-											targetUrl
-										}
-									}
-								}
-							}
-						}
-					}
-					pageInfo {
-						endCursor
-						hasNextPage
-					}
-				}
-			}
-	  	}
-	`)
-	req.Var("owner", owner)
-	req.Var("name", name)
-	req.Var("pageSize", pageSize)
-	req.Var("after", nil)
-	req.Var("defaultBranch", defaultBranchRes.Repository.DefaultBranchRef.Name)
-	req.Header.Set("Authorization", authHeader)
-
-	var prs []prDates
-	getNextPage := true
-	for getNextPage {
-		var res prDatesResponse
-		if err := client.Run(context.Background(), req, &res); err != nil {
-			log.Panicln(err)
-		}
-		newPrs := res.Repository.PullRequests.Nodes
-		lastIndex := len(newPrs)
-		for lastIndex > 0 && newPrs[lastIndex-1].CreatedAt.Before(since) {
-			lastIndex--
-		}
-		prs = append(prs, newPrs[:lastIndex]...)
-		getNextPage = lastIndex == len(newPrs) && res.Repository.PullRequests.PageInfo.HasNextPage
-		req.Var("after", res.Repository.PullRequests.PageInfo.EndCursor)
-	}
-
-	return prs
+	return ciMetrics
 }
