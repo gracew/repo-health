@@ -17,6 +17,7 @@ import (
 func main() {
 	router := httprouter.New()
 	router.GET("/login", login)
+	router.OPTIONS("/repos/:org/:name", allowCors)
 	router.GET("/repos/:org/:name", scoreRepository)
 	if err := http.ListenAndServe(":8080", router); err != nil {
 		panic(err)
@@ -28,6 +29,11 @@ type githubTokenRequest struct {
 	ClientSecret string `json:"client_secret"`
 	Code         string `json:"code"`
 	State        string `json:"state"`
+}
+
+func allowCors(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "*")
 }
 
 func login(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
@@ -47,6 +53,7 @@ func login(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
 		log.Panicln(err)
 	}
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-type", "application/json")
 
 	client := &http.Client{}
 	res, err := client.Do(req)
