@@ -82,6 +82,14 @@ type pageInfo struct {
 	HasNextPage bool
 }
 
+type defaultBranchResponse struct {
+	Repository struct {
+		DefaultBranchRef struct {
+			Name string
+		}
+	}
+}
+
 type prDatesResponse struct {
 	Repository struct {
 		PullRequests struct {
@@ -204,6 +212,7 @@ func getIssuesCreatedSince(client *graphql.Client, authHeader string, owner stri
 	for getNextPage {
 		var res issueDatesResponse
 		if err := client.Run(context.Background(), req, &res); err != nil {
+
 			log.Panicln(err)
 		}
 		newIssues := res.Repository.Issues.Nodes
@@ -311,11 +320,28 @@ func GetPRScore(client *graphql.Client, authHeader string, owner string, name st
 }
 
 func getPRsCreatedSince(client *graphql.Client, authHeader string, owner string, name string, since time.Time) []prDates {
-	// TODO(gracew): look up the repo's default branch and use that in the query
-	req := graphql.NewRequest(`
-		query ($owner: String!, $name: String!, $pageSize: Int!, $after: String) {
+	defaultBranchReq := graphql.NewRequest(`
+		query ($owner: String!, $name: String!) {
 			repository(owner: $owner, name: $name) {
-		 		pullRequests(first: $pageSize, after: $after, orderBy: {field: CREATED_AT, direction: DESC}, baseRefName: "master") {
+				defaultBranchRef {
+					name
+				}
+			}
+		}
+	`)
+	defaultBranchReq.Var("owner", owner)
+	defaultBranchReq.Var("name", name)
+	defaultBranchReq.Header.Set("Authorization", authHeader)
+
+	var defaultBranchRes defaultBranchResponse
+	if err := client.Run(context.Background(), defaultBranchReq, &defaultBranchRes); err != nil {
+		log.Panicln(err)
+	}
+
+	req := graphql.NewRequest(`
+		query ($owner: String!, $name: String!, $pageSize: Int!, $after: String, $defaultBranch: String!) {
+			repository(owner: $owner, name: $name) {
+		 		pullRequests(first: $pageSize, after: $after, orderBy: {field: CREATED_AT, direction: DESC}, baseRefName: $defaultBranch) {
 					nodes {
 						number
 						title
@@ -356,6 +382,7 @@ func getPRsCreatedSince(client *graphql.Client, authHeader string, owner string,
 	req.Var("name", name)
 	req.Var("pageSize", pageSize)
 	req.Var("after", nil)
+	req.Var("defaultBranch", defaultBranchRes.Repository.DefaultBranchRef.Name)
 	req.Header.Set("Authorization", authHeader)
 
 	var prs []prDates
