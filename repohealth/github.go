@@ -2,7 +2,6 @@ package repohealth
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"time"
 
@@ -66,55 +65,42 @@ type checkContext struct {
 	TargetURL string
 }
 
-const ciFragment = `
-	fragment ciFields on PullRequest {
-		commits(last: 1) {
-			nodes {
-				commit {
-					committedDate
-					pushedDate
-					status {
-						contexts {
-							context
-							createdAt
-							targetUrl
+const prFragment = `
+	fragment prFields on PullRequestConnection {
+		nodes {
+			number
+			title
+			url
+			state
+			createdAt
+			closedAt
+			merged
+			isCrossRepository
+			reviews(first: 1) {
+				totalCount
+			}
+			commits(last: 1) @include(if: $includeCiFields) {
+				nodes {
+					commit {
+						committedDate
+						pushedDate
+						status {
+							contexts {
+								context
+								createdAt
+								targetUrl
+							}
 						}
 					}
 				}
 			}
 		}
+		pageInfo {
+			endCursor
+			hasNextPage
+		}
 	}
 `
-
-func getPRFragment(includeCIFields bool) string {
-	fragment := `
-		fragment prFields on PullRequestConnection {
-			nodes {
-				number
-				title
-				url
-				state
-				createdAt
-				closedAt
-				merged
-				isCrossRepository
-				reviews(first: 1) {
-					totalCount
-				}
-				%s
-			}
-			pageInfo {
-				endCursor
-				hasNextPage
-			}
-		}
-		%s
-	`
-	if includeCIFields {
-		return fmt.Sprintf(fragment, "...ciFields", ciFragment)
-	}
-	return fmt.Sprintf(fragment, "", "")
-}
 
 func getRepoPRsCreatedSince(client *graphql.Client, authHeader string, owner string, name string, since time.Time) []pr {
 	defaultBranchReq := graphql.NewRequest(`
@@ -136,14 +122,14 @@ func getRepoPRsCreatedSince(client *graphql.Client, authHeader string, owner str
 	}
 
 	req := graphql.NewRequest(`
-		query ($owner: String!, $name: String!, $pageSize: Int!, $after: String, $defaultBranch: String!) {
+		query ($owner: String!, $name: String!, $pageSize: Int!, $after: String, $defaultBranch: String!, $includeCiFields: Boolean = true) {
 			repository(owner: $owner, name: $name) {
 				pullRequests(first: $pageSize, after: $after, orderBy: {field: CREATED_AT, direction: DESC}, baseRefName: $defaultBranch) {
 					...prFields
 				}
 			}
 	  	}
-	` + getPRFragment(true))
+	` + prFragment)
 	req.Var("owner", owner)
 	req.Var("name", name)
 	req.Var("pageSize", pageSize)
@@ -173,14 +159,14 @@ func getRepoPRsCreatedSince(client *graphql.Client, authHeader string, owner str
 
 func getUserPRsCreatedSince(client *graphql.Client, authHeader string, user string, since time.Time) []pr {
 	req := graphql.NewRequest(`
-		query ($user: String!, $pageSize: Int!, $after: String) {
+		query ($user: String!, $pageSize: Int!, $after: String, $includeCiFields: Boolean = false) {
 			user(login: $user) {
 				pullRequests(first: $pageSize, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) {
 					...prFields
 				}
 			}
 	  	}
-	` + getPRFragment(false))
+	` + prFragment)
 	req.Var("user", user)
 	req.Var("pageSize", pageSize)
 	req.Var("after", nil)
