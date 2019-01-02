@@ -6,5 +6,8 @@ jobs:
     working_directory: /go/src/github.com/gracew/repo-health
     steps:
       - checkout
-      - run: go get -v -t -d ./...
       - run: go vet -v ./...
+      - setup_remote_docker
+      - run: docker build . -t gcr.io/$GCR_PROJECT/eng-metrics
+      - run: docker login -u _json_key -p "$(echo $GCR_JSON_KEY)" https://gcr.io
+      - run: docker push gcr.io/$GCR_PROJECT/eng-metrics
