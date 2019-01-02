@@ -10,4 +10,4 @@ jobs:
       - setup_remote_docker
       - run: docker build . -t gcr.io/$GCP_PROJECT/eng-metrics:$CIRCLE_SHA1
       - run: docker login -u _json_key -p "$(echo $GCR_JSON_KEY)" https://gcr.io
-      - run: docker push gcr.io/$GCR_PROJECT/eng-metrics:$CIRCLE_SHA1
+      - run: docker push gcr.io/$GCP_PROJECT/eng-metrics:$CIRCLE_SHA1
