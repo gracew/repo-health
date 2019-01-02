@@ -43,8 +43,17 @@ type pr struct {
 	ClosedAt          time.Time
 	Merged            bool
 	IsCrossRepository bool
-	Reviews           struct {
+	Author            struct {
+		Login string
+	}
+	Reviews struct {
 		TotalCount int
+		Nodes      []struct {
+			CreatedAt time.Time
+			Author    struct {
+				Login string
+			}
+		}
 	}
 	Commits struct {
 		Nodes []struct {
@@ -76,10 +85,19 @@ const prFragment = `
 			closedAt
 			merged
 			isCrossRepository
-			reviews(first: 1) {
-				totalCount
+			author @include(if: $byRepo) {
+				login
 			}
-			commits(last: 1) @include(if: $includeCiFields) {
+			reviews(first: 10) {
+				totalCount
+				nodes @include(if: $byRepo) {
+					createdAt
+					author {
+						login
+					}
+				}
+			}
+			commits(last: 1) @include(if: $byRepo) {
 				nodes {
 					commit {
 						committedDate
@@ -122,7 +140,7 @@ func getRepoPRsCreatedSince(client *graphql.Client, authHeader string, owner str
 	}
 
 	req := graphql.NewRequest(`
-		query ($owner: String!, $name: String!, $pageSize: Int!, $after: String, $defaultBranch: String!, $includeCiFields: Boolean = true) {
+		query ($owner: String!, $name: String!, $pageSize: Int!, $after: String, $defaultBranch: String!, $byRepo: Boolean = true) {
 			repository(owner: $owner, name: $name) {
 				pullRequests(first: $pageSize, after: $after, orderBy: {field: CREATED_AT, direction: DESC}, baseRefName: $defaultBranch) {
 					...prFields
@@ -159,7 +177,7 @@ func getRepoPRsCreatedSince(client *graphql.Client, authHeader string, owner str
 
 func getUserPRsCreatedSince(client *graphql.Client, authHeader string, user string, since time.Time) []pr {
 	req := graphql.NewRequest(`
-		query ($user: String!, $pageSize: Int!, $after: String, $includeCiFields: Boolean = false) {
+		query ($user: String!, $pageSize: Int!, $after: String, $byRepo: Boolean = false) {
 			user(login: $user) {
 				pullRequests(first: $pageSize, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) {
 					...prFields

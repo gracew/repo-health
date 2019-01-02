@@ -42,6 +42,7 @@ type PRDetails struct {
 	Title          string `json:"title"`
 	URL            string `json:"url"`
 	ResolutionTime int    `json:"resolutionTime"` // in sec, will be -1 if PR has not yet been resolved
+	ReviewTime     int    `json:"reviewTime"`     // in sec, will be -1 if PR has not yet been reviewed
 	NumReviews     int    `json:"reviews"`
 	State          string `json:"state"`
 }
@@ -198,6 +199,7 @@ func GetPRScore(prs []pr, since time.Time, numWeeks int) []WeeklyPRMetrics {
 		createdWeek := int(pr.CreatedAt.Sub(since).Seconds()) / secondsInWeek
 		weekToNumPRsOpened[createdWeek]++
 
+		resolutionTime := -1
 		if pr.ClosedAt.After(since) {
 			closedWeek := int(pr.ClosedAt.Sub(since).Seconds()) / secondsInWeek
 			if pr.Merged {
@@ -205,15 +207,26 @@ func GetPRScore(prs []pr, since time.Time, numWeeks int) []WeeklyPRMetrics {
 			} else {
 				weekToNumPRsRejected[closedWeek]++
 			}
-			weekToPRDetails[createdWeek] = append(weekToPRDetails[createdWeek], PRDetails{
-				Number:         pr.Number,
-				Title:          pr.Title,
-				URL:            pr.URL,
-				State:          pr.State,
-				ResolutionTime: int(pr.ClosedAt.Sub(pr.CreatedAt).Seconds()),
-				NumReviews:     pr.Reviews.TotalCount,
-			})
+			resolutionTime = int(pr.ClosedAt.Sub(pr.CreatedAt).Seconds())
 		}
+
+		reviewTime := -1
+		for _, review := range pr.Reviews.Nodes {
+			if review.Author.Login != pr.Author.Login {
+				reviewTime = int(review.CreatedAt.Sub(pr.CreatedAt).Seconds())
+				break
+			}
+		}
+
+		weekToPRDetails[createdWeek] = append(weekToPRDetails[createdWeek], PRDetails{
+			Number:         pr.Number,
+			Title:          pr.Title,
+			URL:            pr.URL,
+			State:          pr.State,
+			ResolutionTime: resolutionTime,
+			ReviewTime:     reviewTime,
+			NumReviews:     pr.Reviews.TotalCount,
+		})
 	}
 
 	prMetrics := []WeeklyPRMetrics{}
