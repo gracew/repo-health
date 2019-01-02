@@ -22,9 +22,8 @@ workflows:
     jobs:
       - build
       - push-image:
-          requires: 
+          requires:
             - build
           filters:
             branches:
               only: master
-    
