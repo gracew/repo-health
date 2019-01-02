@@ -21,7 +21,7 @@ workflows:
   all-jobs:
     jobs:
       - build
-      - push-image
+      - push-image:
           requires: 
             - build
           filters:
