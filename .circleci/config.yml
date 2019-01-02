@@ -3,11 +3,28 @@ jobs:
   build:
     docker:
       - image: circleci/golang:1.11
-    working_directory: /go/src/github.com/gracew/repo-health
     steps:
       - checkout
       - run: go vet -v ./...
+  push-image:
+    docker:
+      - image: circleci/golang:1.11
+    steps:
+      - checkout
       - setup_remote_docker
       - run: docker build . -t gcr.io/$GCP_PROJECT/eng-metrics:$CIRCLE_SHA1
       - run: docker login -u _json_key -p "$(echo $GCR_JSON_KEY)" https://gcr.io
       - run: docker push gcr.io/$GCP_PROJECT/eng-metrics:$CIRCLE_SHA1
+
+workflows:
+  version: 2
+  all-jobs:
+    jobs:
+      - build
+      - push-image
+          requires: 
+            - build
+          filters:
+            branches:
+              only: master
+    
