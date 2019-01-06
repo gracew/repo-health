@@ -37,7 +37,7 @@ func GetRepositoryIssues(w http.ResponseWriter, r *http.Request, params httprout
 	numWeeks := getWeeks(r)
 	since := getStartDate(numWeeks)
 
-	issues := getIssuesCreatedSince(client, authHeader, owner, name, since)
+	issues := getIssuesCreatedSince(client, authHeader, params.ByName("owner"), params.ByName("name"), since)
 	issueScore := GetIssueScore(client, authHeader, params.ByName("owner"), params.ByName("name"), getWeeks(r))
 	// TODO(gracew): remove once there's a proper dev setup
 	w.Header().Set("Access-Control-Allow-Origin", "*")
