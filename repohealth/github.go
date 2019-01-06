@@ -11,13 +11,13 @@ import (
 type issueDatesResponse struct {
 	Repository struct {
 		Issues struct {
-			Nodes    []issueDates
+			Nodes    []issue
 			PageInfo pageInfo
 		}
 	}
 }
 
-type issueDates struct {
+type issue struct {
 	Number    int
 	Title     string
 	URL       string
@@ -31,7 +31,7 @@ type pageInfo struct {
 	HasNextPage bool
 }
 
-func getIssuesCreatedSince(client *graphql.Client, authHeader string, owner string, name string, since time.Time) []issueDates {
+func getIssuesCreatedSince(client *graphql.Client, authHeader string, owner string, name string, since time.Time) []issue {
 	req := graphql.NewRequest(`
 		query ($owner: String!, $name: String!, $pageSize: Int!, $after: String) {
 			repository(owner: $owner, name: $name) {
@@ -58,7 +58,7 @@ func getIssuesCreatedSince(client *graphql.Client, authHeader string, owner stri
 	req.Var("after", nil)
 	req.Header.Set("Authorization", authHeader)
 
-	var issues []issueDates
+	var issues []issue
 	getNextPage := true
 	for getNextPage {
 		var res issueDatesResponse
