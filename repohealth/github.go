@@ -8,6 +8,77 @@ import (
 	"github.com/machinebox/graphql"
 )
 
+type issueDatesResponse struct {
+	Repository struct {
+		Issues struct {
+			Nodes    []issue
+			PageInfo pageInfo
+		}
+	}
+}
+
+type issue struct {
+	Number    int
+	Title     string
+	URL       string
+	State     string
+	CreatedAt time.Time
+	ClosedAt  time.Time
+}
+
+type pageInfo struct {
+	EndCursor   string
+	HasNextPage bool
+}
+
+func getIssuesCreatedSince(client *graphql.Client, authHeader string, owner string, name string, since time.Time) []issue {
+	req := graphql.NewRequest(`
+		query ($owner: String!, $name: String!, $pageSize: Int!, $after: String) {
+			repository(owner: $owner, name: $name) {
+		 		issues(first: $pageSize, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) {
+					nodes {
+						number
+						title
+						url
+						state
+						createdAt
+						closedAt
+					}
+					pageInfo {
+						endCursor
+						hasNextPage
+					}
+				}
+			}
+	  	}
+	`)
+	req.Var("owner", owner)
+	req.Var("name", name)
+	req.Var("pageSize", pageSize)
+	req.Var("after", nil)
+	req.Header.Set("Authorization", authHeader)
+
+	var issues []issue
+	getNextPage := true
+	for getNextPage {
+		var res issueDatesResponse
+		if err := client.Run(context.Background(), req, &res); err != nil {
+
+			log.Panicln(err)
+		}
+		newIssues := res.Repository.Issues.Nodes
+		lastIndex := len(newIssues)
+		for lastIndex > 0 && newIssues[lastIndex-1].CreatedAt.Before(since) {
+			lastIndex--
+		}
+		issues = append(issues, newIssues[:lastIndex]...)
+		getNextPage = lastIndex == len(newIssues) && res.Repository.Issues.PageInfo.HasNextPage
+		req.Var("after", res.Repository.Issues.PageInfo.EndCursor)
+	}
+
+	return issues
+}
+
 type defaultBranchResponse struct {
 	Repository struct {
 		DefaultBranchRef struct {
@@ -84,7 +155,6 @@ const prFragment = `
 			createdAt
 			closedAt
 			merged
-			isCrossRepository
 			author @include(if: $byRepo) {
 				login
 			}
@@ -97,6 +167,22 @@ const prFragment = `
 					}
 				}
 			}
+		}
+		pageInfo {
+			endCursor
+			hasNextPage
+		}
+	}
+`
+
+const prWithCIMetadataFragment = `
+	fragment prFields on PullRequestConnection {
+		nodes {
+			number
+			title
+			url
+			createdAt
+			isCrossRepository
 			commits(last: 1) @include(if: $byRepo) {
 				nodes {
 					commit {
@@ -120,7 +206,7 @@ const prFragment = `
 	}
 `
 
-func getRepoPRsCreatedSince(client *graphql.Client, authHeader string, owner string, name string, since time.Time) []pr {
+func getRepoPRsCreatedSince(client *graphql.Client, authHeader string, owner string, name string, since time.Time, prFragment string) []pr {
 	defaultBranchReq := graphql.NewRequest(`
 		query ($owner: String!, $name: String!) {
 			repository(owner: $owner, name: $name) {

@@ -7,21 +7,28 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"time"
 
 	"github.com/gracew/repo-health/repohealth"
 	"github.com/julienschmidt/httprouter"
-	"github.com/machinebox/graphql"
 )
 
 func main() {
 	router := httprouter.New()
 	router.GET("/login", login)
-	router.OPTIONS("/repos/:org/:name", allowCors)
-	router.GET("/repos/:org/:name", scoreRepository)
+
+	router.OPTIONS("/repos/:owner/:name/issues", allowCors)
+	router.GET("/repos/:owner/:name/issues", repohealth.GetRepositoryIssues)
+
+	router.OPTIONS("/repos/:owner/:name/prs", allowCors)
+	router.GET("/repos/:owner/:name/prs", repohealth.GetRepositoryPRs)
+
+	router.OPTIONS("/repos/:owner/:name/ci", allowCors)
+	router.GET("/repos/:owner/:name/ci", repohealth.GetRepositoryCI)
+
 	router.OPTIONS("/users/:user", allowCors)
-	router.GET("/users/:user", scoreUser)
+	router.GET("/users/:user", repohealth.GetUserPRs)
+
 	if err := http.ListenAndServe(":8080", router); err != nil {
 		panic(err)
 	}
@@ -70,46 +77,4 @@ func login(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
 		log.Panicln(err)
 	}
 	w.Write(bytes)
-}
-
-func scoreRepository(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
-	client := graphql.NewClient("https://api.github.com/graphql")
-
-	// TODO(gracew): if there's no auth header then return a 403...
-	authHeader := r.Header.Get("Authorization")
-
-	org := params.ByName("org")
-	name := params.ByName("name")
-	queryValues := r.URL.Query()
-	numWeeks, err := strconv.Atoi(queryValues.Get("weeks"))
-	if err != nil {
-		log.Panicln(err)
-	}
-
-	issueScore := repohealth.GetIssueScore(client, authHeader, org, name, numWeeks)
-	prScore, ciScore := repohealth.GetRepoPRAndCIScores(client, authHeader, org, name, numWeeks)
-	repoScore := repohealth.RepositoryScore{Issues: issueScore, PRs: prScore, CI: ciScore}
-	// TODO(gracew): remove once there's a proper dev setup
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	json.NewEncoder(w).Encode(repoScore)
-}
-
-func scoreUser(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
-	client := graphql.NewClient("https://api.github.com/graphql")
-
-	// TODO(gracew): if there's no auth header then return a 403...
-	authHeader := r.Header.Get("Authorization")
-
-	user := params.ByName("user")
-	queryValues := r.URL.Query()
-	numWeeks, err := strconv.Atoi(queryValues.Get("weeks"))
-	if err != nil {
-		log.Panicln(err)
-	}
-
-	prScore := repohealth.GetUserPRScore(client, authHeader, user, numWeeks)
-	userScore := repohealth.UserScore{PRs: prScore}
-	// TODO(gracew): remove once there's a proper dev setup
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	json.NewEncoder(w).Encode(userScore)
 }

@@ -1,18 +1,8 @@
 package repohealth
 
 import (
-	"context"
-	"log"
 	"time"
-
-	"github.com/machinebox/graphql"
 )
-
-type RepositoryScore struct {
-	Issues []WeeklyIssueMetrics `json:"issues"`
-	PRs    []WeeklyPRMetrics    `json:"prs"`
-	CI     []WeeklyCIMetrics    `json:"ci"`
-}
 
 type WeeklyIssueMetrics struct {
 	Week      string         `json:"week"`
@@ -60,45 +50,10 @@ type CIDetails struct {
 	MaxCheckURL      string `json:"maxCheckUrl"`
 }
 
-type issueDatesResponse struct {
-	Repository struct {
-		Issues struct {
-			Nodes    []issueDates
-			PageInfo pageInfo
-		}
-	}
-}
-
-type issueDates struct {
-	Number    int
-	Title     string
-	URL       string
-	State     string
-	CreatedAt time.Time
-	ClosedAt  time.Time
-}
-
-type pageInfo struct {
-	EndCursor   string
-	HasNextPage bool
-}
-
 const pageSize = 100 // default is 30
 const dateFormat = "2006-01-02"
 
-// returns the first Sunday after (today - numWeeks)
-func getStartDate(numWeeks int) time.Time {
-	since := time.Now().AddDate(0, 0, -7*numWeeks)
-	for since.Weekday() != 0 {
-		since = since.AddDate(0, 0, 1)
-	}
-	return since
-}
-
-func GetIssueScore(client *graphql.Client, authHeader string, owner string, name string, numWeeks int) []WeeklyIssueMetrics {
-	since := getStartDate(numWeeks)
-	issues := getIssuesCreatedSince(client, authHeader, owner, name, since)
-
+func GetIssueScore(issues []issue, since time.Time, numWeeks int) []WeeklyIssueMetrics {
 	weekToNumIssuesOpened := map[int]int{}
 	weekToNumIssuesClosed := map[int]int{}
 	weekToIssueDetails := map[int][]IssueDetails{}
@@ -131,62 +86,6 @@ func GetIssueScore(client *graphql.Client, authHeader string, owner string, name
 		})
 	}
 	return metrics
-}
-
-func getIssuesCreatedSince(client *graphql.Client, authHeader string, owner string, name string, since time.Time) []issueDates {
-	req := graphql.NewRequest(`
-		query ($owner: String!, $name: String!, $pageSize: Int!, $after: String) {
-			repository(owner: $owner, name: $name) {
-		 		issues(first: $pageSize, after: $after, orderBy: {field: CREATED_AT, direction: DESC}) {
-					nodes {
-						number
-						title
-						url
-						state
-						createdAt
-						closedAt
-					}
-					pageInfo {
-						endCursor
-						hasNextPage
-					}
-				}
-			}
-	  	}
-	`)
-	req.Var("owner", owner)
-	req.Var("name", name)
-	req.Var("pageSize", pageSize)
-	req.Var("after", nil)
-	req.Header.Set("Authorization", authHeader)
-
-	var issues []issueDates
-	getNextPage := true
-	for getNextPage {
-		var res issueDatesResponse
-		if err := client.Run(context.Background(), req, &res); err != nil {
-
-			log.Panicln(err)
-		}
-		newIssues := res.Repository.Issues.Nodes
-		lastIndex := len(newIssues)
-		for lastIndex > 0 && newIssues[lastIndex-1].CreatedAt.Before(since) {
-			lastIndex--
-		}
-		issues = append(issues, newIssues[:lastIndex]...)
-		getNextPage = lastIndex == len(newIssues) && res.Repository.Issues.PageInfo.HasNextPage
-		req.Var("after", res.Repository.Issues.PageInfo.EndCursor)
-	}
-
-	return issues
-}
-
-func GetRepoPRAndCIScores(client *graphql.Client, authHeader string, owner string, name string, numWeeks int) ([]WeeklyPRMetrics, []WeeklyCIMetrics) {
-	since := getStartDate(numWeeks)
-	prs := getRepoPRsCreatedSince(client, authHeader, owner, name, since)
-	prMetrics := GetPRScore(prs, since, numWeeks)
-	ciMetrics := GetCIScore(prs, since, numWeeks)
-	return prMetrics, ciMetrics
 }
 
 func GetPRScore(prs []pr, since time.Time, numWeeks int) []WeeklyPRMetrics {
