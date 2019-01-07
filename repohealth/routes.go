@@ -42,7 +42,6 @@ func handleError(err error, w http.ResponseWriter) {
 func GetRepositoryIssues(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
 	client := graphql.NewClient("https://api.github.com/graphql")
 
-	// TODO(gracew): if there's no auth header then return a 403...
 	authHeader := r.Header.Get("Authorization")
 	numWeeks := getWeeks(r)
 	since := getStartDate(numWeeks)
