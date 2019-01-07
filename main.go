@@ -17,16 +17,12 @@ func main() {
 	router := httprouter.New()
 	router.GET("/login", login)
 
-	router.OPTIONS("/repos/:owner/:name/issues", allowCors)
 	router.GET("/repos/:owner/:name/issues", requireAuthHeader(repohealth.GetRepositoryIssues))
 
-	router.OPTIONS("/repos/:owner/:name/prs", allowCors)
 	router.GET("/repos/:owner/:name/prs", requireAuthHeader(repohealth.GetRepositoryPRs))
 
-	router.OPTIONS("/repos/:owner/:name/ci", allowCors)
 	router.GET("/repos/:owner/:name/ci", requireAuthHeader(repohealth.GetRepositoryCI))
 
-	router.OPTIONS("/users/:user", allowCors)
 	router.GET("/users/:user", requireAuthHeader(repohealth.GetUserPRs))
 
 	if err := http.ListenAndServe(":8080", router); err != nil {
@@ -49,11 +45,6 @@ type githubTokenRequest struct {
 	ClientSecret string `json:"client_secret"`
 	Code         string `json:"code"`
 	State        string `json:"state"`
-}
-
-func allowCors(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Headers", "*")
 }
 
 func login(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
@@ -80,8 +71,6 @@ func login(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
 	if err != nil {
 		log.Panicln(err)
 	}
-	// TODO(gracew): remove once there's a proper dev setup
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	bytes, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		log.Panicln(err)
