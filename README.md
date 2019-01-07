@@ -1,6 +1,6 @@
 # repo-health
 
-To start the server, provision an access token with "repo" scope and run:
+To start the server:
 ```
-ACCESS_TOKEN=<access token> go run main.go
+CLIENT_ID=<client id> CLIENT_SECRET=<client secret> go run main.go
 ```

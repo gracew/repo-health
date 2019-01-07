@@ -52,8 +52,6 @@ func GetRepositoryIssues(w http.ResponseWriter, r *http.Request, params httprout
 		return
 	}
 	issueScore := GetIssueScore(issues, since, getWeeks(r))
-	// TODO(gracew): remove once there's a proper dev setup
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(issueScore)
 }
 
@@ -70,7 +68,6 @@ func GetRepositoryPRs(w http.ResponseWriter, r *http.Request, params httprouter.
 		return
 	}
 	prScore := GetPRScore(prs, since, numWeeks)
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(prScore)
 }
 
@@ -87,7 +84,6 @@ func GetRepositoryCI(w http.ResponseWriter, r *http.Request, params httprouter.P
 		return
 	}
 	ciScore := GetCIScore(prs, since, numWeeks)
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(ciScore)
 }
 
@@ -106,6 +102,5 @@ func GetUserPRs(w http.ResponseWriter, r *http.Request, params httprouter.Params
 		return
 	}
 	prScore := GetPRScore(prs, since, numWeeks)
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(prScore)
 }
