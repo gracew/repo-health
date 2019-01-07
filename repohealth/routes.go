@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/julienschmidt/httprouter"
@@ -12,10 +13,10 @@ import (
 )
 
 func getWeeks(r *http.Request) int {
-	queryValues := r.URL.Query()
-	numWeeks, err := strconv.Atoi(queryValues.Get("weeks"))
+	numWeeks, err := strconv.Atoi(r.URL.Query().Get("weeks"))
 	if err != nil {
-		log.Panicln(err)
+		log.Println("failed to parse weeks parameter, using default of 6", err)
+		return 6
 	}
 	return numWeeks
 }
@@ -29,6 +30,15 @@ func getStartDate(numWeeks int) time.Time {
 	return since
 }
 
+func handleError(err error, w http.ResponseWriter) {
+	log.Println(err)
+	if strings.Contains(err.Error(), "Could not resolve to a Repository") {
+		w.WriteHeader(http.StatusNotFound)
+	} else {
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+}
+
 func GetRepositoryIssues(w http.ResponseWriter, r *http.Request, params httprouter.Params) {
 	client := graphql.NewClient("https://api.github.com/graphql")
 
@@ -37,7 +47,11 @@ func GetRepositoryIssues(w http.ResponseWriter, r *http.Request, params httprout
 	numWeeks := getWeeks(r)
 	since := getStartDate(numWeeks)
 
-	issues := getIssuesCreatedSince(client, authHeader, params.ByName("owner"), params.ByName("name"), since)
+	issues, err := getIssuesCreatedSince(client, authHeader, params.ByName("owner"), params.ByName("name"), since)
+	if err != nil {
+		handleError(err, w)
+		return
+	}
 	issueScore := GetIssueScore(issues, since, getWeeks(r))
 	// TODO(gracew): remove once there's a proper dev setup
 	w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -51,7 +65,11 @@ func GetRepositoryPRs(w http.ResponseWriter, r *http.Request, params httprouter.
 	numWeeks := getWeeks(r)
 	since := getStartDate(numWeeks)
 
-	prs := getRepoPRsCreatedSince(client, authHeader, params.ByName("owner"), params.ByName("name"), since, prFragment)
+	prs, err := getRepoPRsCreatedSince(client, authHeader, params.ByName("owner"), params.ByName("name"), since, prFragment)
+	if err != nil {
+		handleError(err, w)
+		return
+	}
 	prScore := GetPRScore(prs, since, numWeeks)
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(prScore)
@@ -64,7 +82,11 @@ func GetRepositoryCI(w http.ResponseWriter, r *http.Request, params httprouter.P
 	numWeeks := getWeeks(r)
 	since := getStartDate(numWeeks)
 
-	prs := getRepoPRsCreatedSince(client, authHeader, params.ByName("owner"), params.ByName("name"), since, prWithCIMetadataFragment)
+	prs, err := getRepoPRsCreatedSince(client, authHeader, params.ByName("owner"), params.ByName("name"), since, prWithCIMetadataFragment)
+	if err != nil {
+		handleError(err, w)
+		return
+	}
 	ciScore := GetCIScore(prs, since, numWeeks)
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(ciScore)
@@ -79,9 +101,12 @@ func GetUserPRs(w http.ResponseWriter, r *http.Request, params httprouter.Params
 	numWeeks := getWeeks(r)
 	since := getStartDate(numWeeks)
 
-	prs := getUserPRsCreatedSince(client, authHeader, user, since)
+	prs, err := getUserPRsCreatedSince(client, authHeader, user, since)
+	if err != nil {
+		handleError(err, w)
+		return
+	}
 	prScore := GetPRScore(prs, since, numWeeks)
-	// TODO(gracew): remove once there's a proper dev setup
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	json.NewEncoder(w).Encode(prScore)
 }

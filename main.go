@@ -18,19 +18,29 @@ func main() {
 	router.GET("/login", login)
 
 	router.OPTIONS("/repos/:owner/:name/issues", allowCors)
-	router.GET("/repos/:owner/:name/issues", repohealth.GetRepositoryIssues)
+	router.GET("/repos/:owner/:name/issues", requireAuthHeader(repohealth.GetRepositoryIssues))
 
 	router.OPTIONS("/repos/:owner/:name/prs", allowCors)
-	router.GET("/repos/:owner/:name/prs", repohealth.GetRepositoryPRs)
+	router.GET("/repos/:owner/:name/prs", requireAuthHeader(repohealth.GetRepositoryPRs))
 
 	router.OPTIONS("/repos/:owner/:name/ci", allowCors)
-	router.GET("/repos/:owner/:name/ci", repohealth.GetRepositoryCI)
+	router.GET("/repos/:owner/:name/ci", requireAuthHeader(repohealth.GetRepositoryCI))
 
 	router.OPTIONS("/users/:user", allowCors)
-	router.GET("/users/:user", repohealth.GetUserPRs)
+	router.GET("/users/:user", requireAuthHeader(repohealth.GetUserPRs))
 
 	if err := http.ListenAndServe(":8080", router); err != nil {
 		panic(err)
+	}
+}
+
+func requireAuthHeader(handler httprouter.Handle) httprouter.Handle {
+	return func(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+		if r.Header.Get("Authorization") == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		handler(w, r, ps)
 	}
 }
 

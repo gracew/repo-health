@@ -2,10 +2,10 @@ package repohealth
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"github.com/machinebox/graphql"
+	"github.com/pkg/errors"
 )
 
 type issueDatesResponse struct {
@@ -31,7 +31,7 @@ type pageInfo struct {
 	HasNextPage bool
 }
 
-func getIssuesCreatedSince(client *graphql.Client, authHeader string, owner string, name string, since time.Time) []issue {
+func getIssuesCreatedSince(client *graphql.Client, authHeader string, owner string, name string, since time.Time) ([]issue, error) {
 	req := graphql.NewRequest(`
 		query ($owner: String!, $name: String!, $pageSize: Int!, $after: String) {
 			repository(owner: $owner, name: $name) {
@@ -63,8 +63,7 @@ func getIssuesCreatedSince(client *graphql.Client, authHeader string, owner stri
 	for getNextPage {
 		var res issueDatesResponse
 		if err := client.Run(context.Background(), req, &res); err != nil {
-
-			log.Panicln(err)
+			return nil, errors.Wrap(err, "failed to fetch repo issues")
 		}
 		newIssues := res.Repository.Issues.Nodes
 		lastIndex := len(newIssues)
@@ -76,7 +75,7 @@ func getIssuesCreatedSince(client *graphql.Client, authHeader string, owner stri
 		req.Var("after", res.Repository.Issues.PageInfo.EndCursor)
 	}
 
-	return issues
+	return issues, nil
 }
 
 type defaultBranchResponse struct {
@@ -206,7 +205,7 @@ const prWithCIMetadataFragment = `
 	}
 `
 
-func getRepoPRsCreatedSince(client *graphql.Client, authHeader string, owner string, name string, since time.Time, prFragment string) []pr {
+func getRepoPRsCreatedSince(client *graphql.Client, authHeader string, owner string, name string, since time.Time, prFragment string) ([]pr, error) {
 	defaultBranchReq := graphql.NewRequest(`
 		query ($owner: String!, $name: String!) {
 			repository(owner: $owner, name: $name) {
@@ -222,7 +221,7 @@ func getRepoPRsCreatedSince(client *graphql.Client, authHeader string, owner str
 
 	var defaultBranchRes defaultBranchResponse
 	if err := client.Run(context.Background(), defaultBranchReq, &defaultBranchRes); err != nil {
-		log.Panicln(err)
+		return nil, errors.Wrap(err, "failed to fetch default branch for repo")
 	}
 
 	req := graphql.NewRequest(`
@@ -246,7 +245,7 @@ func getRepoPRsCreatedSince(client *graphql.Client, authHeader string, owner str
 	for getNextPage {
 		var res repoPRResponse
 		if err := client.Run(context.Background(), req, &res); err != nil {
-			log.Panicln(err)
+			return nil, errors.Wrap(err, "failed to fetch repo PRs")
 		}
 		newPrs := res.Repository.PullRequests.Nodes
 		lastIndex := len(newPrs)
@@ -258,10 +257,10 @@ func getRepoPRsCreatedSince(client *graphql.Client, authHeader string, owner str
 		req.Var("after", res.Repository.PullRequests.PageInfo.EndCursor)
 	}
 
-	return prs
+	return prs, nil
 }
 
-func getUserPRsCreatedSince(client *graphql.Client, authHeader string, user string, since time.Time) []pr {
+func getUserPRsCreatedSince(client *graphql.Client, authHeader string, user string, since time.Time) ([]pr, error) {
 	req := graphql.NewRequest(`
 		query ($user: String!, $pageSize: Int!, $after: String, $byRepo: Boolean = false) {
 			user(login: $user) {
@@ -281,7 +280,7 @@ func getUserPRsCreatedSince(client *graphql.Client, authHeader string, user stri
 	for getNextPage {
 		var res userPRResponse
 		if err := client.Run(context.Background(), req, &res); err != nil {
-			log.Panicln(err)
+			return nil, errors.Wrap(err, "failed to fetch user PRs")
 		}
 		newPrs := res.User.PullRequests.Nodes
 		lastIndex := len(newPrs)
@@ -293,5 +292,5 @@ func getUserPRsCreatedSince(client *graphql.Client, authHeader string, user stri
 		req.Var("after", res.User.PullRequests.PageInfo.EndCursor)
 	}
 
-	return prs
+	return prs, nil
 }
